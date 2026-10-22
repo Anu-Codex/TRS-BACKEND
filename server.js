@@ -110,6 +110,14 @@ const PlayerSchema = new mongoose.Schema({
         losses: { type: Number, default: 0 },
         goals: { type: Number, default: 0 }
     },
+    gamertag: String,
+efootballId: String,
+playstyle: String,
+device: String,
+formation: String,
+role: String,
+winRate: String,
+matchesPlayed: Number,
 
     // Trophies count
     trophies: {
@@ -3604,6 +3612,113 @@ app.get('/api/auction/sync-incremental', async (req, res) => {
         });
     } catch (err) {
         console.error("Incremental Sync Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+// ==========================================
+// THE RISING STARS: CLAN STATS, WAR LOGS & ROSTER
+// ==========================================
+
+// 1. Clan War Metrics Schema (Controls the HUD from your image)
+const ClanStatSchema = new mongoose.Schema({
+    winRate: { type: String, default: "82.4%" },
+    matches: { type: Number, default: 450 },
+    trophies: { type: Number, default: 18 },
+    wins: { type: Number, default: 371 },
+    draws: { type: Number, default: 34 },
+    losses: { type: Number, default: 45 },
+    rankTier: { type: String, default: "TOP 10" }
+}, { timestamps: true });
+
+const ClanStat = mongoose.models.ClanStat || mongoose.model('ClanStat', ClanStatSchema);
+
+// 2. Roster Join Application Schema (Triggered by "JOIN ROSTER" button)
+const RosterAppSchema = new mongoose.Schema({
+    gamertag: String,
+    efootballId: String,
+    division: String,
+    winRate: String,
+    device: String,
+    contact: String,
+    appliedAt: { type: Date, default: Date.now }
+});
+
+const RosterApplication = mongoose.models.RosterApplication || mongoose.model('RosterApplication', RosterAppSchema);
+
+// 3. Clan War Matches Schema (Triggered by "WAR LOGS" button)
+const ClanMatchSchema = new mongoose.Schema({
+    opponent: String,
+    trsScore: Number,
+    oppScore: Number,
+    mvp: String,
+    tourney: String,
+    date: { type: Date, default: Date.now }
+});
+
+const ClanMatch = mongoose.models.ClanMatch || mongoose.model('ClanMatch', ClanMatchSchema);
+
+
+// --- API ROUTES FOR FRONTEND ---
+
+// Health Ping (used by frontend to test Render connection)
+app.get('/api/health', (req, res) => {
+    res.json({ status: "online", timestamp: new Date() });
+});
+
+// GET Clan HUD Stats (Win Rate, Matches, Trophies, Wins, Draws, Losses, Rank)
+app.get('/api/clan-stats', async (req, res) => {
+    try {
+        let stats = await ClanStat.findOne().sort({ updatedAt: -1 });
+        if (!stats) {
+            stats = await ClanStat.create({});
+        }
+        res.json(stats);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// UPDATE Clan HUD Stats (from Admin panel)
+app.put('/api/clan-stats', async (req, res) => {
+    try {
+        let stats = await ClanStat.findOne().sort({ updatedAt: -1 });
+        if (!stats) stats = new ClanStat();
+
+        Object.assign(stats, req.body);
+        await stats.save();
+        res.json({ success: true, stats });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST "JOIN ROSTER" application form
+app.post('/api/join-roster', async (req, res) => {
+    try {
+        const appEntry = new RosterApplication(req.body);
+        await appEntry.save();
+        res.json({ success: true, message: "Application received" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET & POST Clan War Logs / Matches
+app.get('/api/matches', async (req, res) => {
+    try {
+        const matches = await ClanMatch.find().sort({ date: -1 });
+        res.json(matches);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/matches', async (req, res) => {
+    try {
+        const match = new ClanMatch(req.body);
+        await match.save();
+        res.json({ success: true, match });
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
