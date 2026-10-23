@@ -3947,7 +3947,11 @@ router.post('/auth/brevo/verify-signin-otp', async (req, res) => {
 });
 
 // --- 8. GOOGLE AUTH SYNC ---
-router.post('/auth/firebase-google', async (req, res) => {
+
+
+module.exports = router;
+// Paste this directly inside server.js (before app.listen)
+app.post('/api/auth/firebase-google', async (req, res) => {
     const { email, uid } = req.body;
 
     try {
@@ -3956,21 +3960,18 @@ router.post('/auth/firebase-google', async (req, res) => {
         });
 
         if (player) {
-            // Already linked
             if (!player.firebaseUid) {
                 player.firebaseUid = uid;
                 await player.save();
             }
             res.json({ isLinked: true, player });
         } else {
-            // Needs to claim profile
             res.json({ isLinked: false, email });
         }
     } catch (err) {
-        res.status(500).json({ error: "Google verification failed" });
+        console.error("Google Auth Error:", err);
+        res.status(500).json({ error: "Google verification failed on database" });
     }
 });
-
-module.exports = router;
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Admin Server running on ${PORT}`));
