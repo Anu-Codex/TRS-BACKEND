@@ -3835,7 +3835,6 @@ async function sendBrevoOtpEmail(toEmail, otp, purpose) {
 // ==========================================
 // 📋 GET UNCLAIMED PLAYERS ROUTE
 // ==========================================
-const Player = require('./models/Player'); // Adjust path to your Player model if needed
 
 const getUnclaimedPlayers = async (req, res) => {
     try {
@@ -3868,8 +3867,7 @@ app.get('/api/players/unclaimed', getUnclaimedPlayers);
 // 2. VERIFY SIGN-UP OTP & PERMANENTLY CLAIM PROFILE
 app.post('/api/auth/brevo/verify-signup-otp', async (req, res) => {
     const { email, otp, playerId } = req.body;
-    const Player = require('./models/Player'); // adjust path if needed
-
+    
     if (!email || !otp || !playerId) {
         return res.status(400).json({ error: "Email, OTP, and player ID are required" });
     }
@@ -3916,8 +3914,7 @@ app.post('/api/auth/brevo/verify-signup-otp', async (req, res) => {
 // 1. REQUEST SIGN-IN OTP
 app.post('/api/auth/brevo/request-signin-otp', async (req, res) => {
     const { email, uid } = req.body;
-    const Player = require('./models/Player'); // adjust path if needed
-
+    
     if (!email) {
         return res.status(400).json({ error: "Email is required" });
     }
@@ -3962,7 +3959,7 @@ app.post('/api/auth/brevo/request-signin-otp', async (req, res) => {
 // 3. VERIFY SIGN-IN OTP
 app.post('/api/auth/brevo/verify-signin-otp', async (req, res) => {
     const { email, otp, uid } = req.body;
-    const Player = require('./models/Player'); // adjust path if needed
+    
 
     if (!email || !otp) {
         return res.status(400).json({ error: "Email and OTP are required" });
