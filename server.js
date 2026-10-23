@@ -155,6 +155,33 @@ app.delete('/api/smart/tournament/:id', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// ==========================================
+// 📋 GET UNCLAIMED PLAYERS ROUTE
+// ==========================================
+
+const getUnclaimedPlayers = async (req, res) => {
+    try {
+        // Finds all players where isClaimed is NOT true (false, undefined, or null)
+        const unclaimed = await Player.find({
+            $or: [
+                { isClaimed: false },
+                { isClaimed: { $exists: false } },
+                { isClaimed: null }
+            ]
+        })
+        .select('_id name teamName nickname image bdrPoints')
+        .sort({ name: 1 }); // Sorted alphabetically
+
+        return res.status(200).json(unclaimed);
+    } catch (err) {
+        console.error("Error fetching unclaimed players:", err);
+        return res.status(500).json({ error: "Failed to fetch unclaimed roster from database" });
+    }
+};
+
+// Supports both URL formats so either one called by your frontend works:
+app.get('/api/unclaimed-players', getUnclaimedPlayers);
+app.get('/api/players/unclaimed', getUnclaimedPlayers);
 // GET Single Player by ID
 app.get('/api/players/:id', async (req, res) => {
     const player = await Player.findById(req.params.id);
@@ -3832,33 +3859,7 @@ async function sendBrevoOtpEmail(toEmail, otp, purpose) {
     return data;
 }
 
-// ==========================================
-// 📋 GET UNCLAIMED PLAYERS ROUTE
-// ==========================================
 
-const getUnclaimedPlayers = async (req, res) => {
-    try {
-        // Finds all players where isClaimed is NOT true (false, undefined, or null)
-        const unclaimed = await Player.find({
-            $or: [
-                { isClaimed: false },
-                { isClaimed: { $exists: false } },
-                { isClaimed: null }
-            ]
-        })
-        .select('_id name teamName nickname image bdrPoints')
-        .sort({ name: 1 }); // Sorted alphabetically
-
-        return res.status(200).json(unclaimed);
-    } catch (err) {
-        console.error("Error fetching unclaimed players:", err);
-        return res.status(500).json({ error: "Failed to fetch unclaimed roster from database" });
-    }
-};
-
-// Supports both URL formats so either one called by your frontend works:
-app.get('/api/unclaimed-players', getUnclaimedPlayers);
-app.get('/api/players/unclaimed', getUnclaimedPlayers);
 
 // --- 4. SIGN UP: REQUEST BREVO OTP ---
 
