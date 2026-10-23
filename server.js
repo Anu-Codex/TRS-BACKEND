@@ -3832,124 +3832,178 @@ async function sendBrevoOtpEmail(toEmail, otp, purpose) {
     return data;
 }
 
-// --- 3. GET UNCLAIMED PLAYERS ---
-router.get('/players/unclaimed', async (req, res) => {
+// ==========================================
+// 📋 GET UNCLAIMED PLAYERS ROUTE
+// ==========================================
+const Player = require('./models/Player'); // Adjust path to your Player model if needed
+
+const getUnclaimedPlayers = async (req, res) => {
     try {
-        const players = await Player.find({ isClaimed: { $ne: true } })
-            .select('_id name teamName image bdrPoints')
-            .sort({ name: 1 });
-        res.json(players);
+        // Finds all players where isClaimed is NOT true (false, undefined, or null)
+        const unclaimed = await Player.find({
+            $or: [
+                { isClaimed: false },
+                { isClaimed: { $exists: false } },
+                { isClaimed: null }
+            ]
+        })
+        .select('_id name teamName nickname image bdrPoints')
+        .sort({ name: 1 }); // Sorted alphabetically
+
+        return res.status(200).json(unclaimed);
     } catch (err) {
-        res.status(500).json({ error: "Failed to fetch unclaimed roster" });
+        console.error("Error fetching unclaimed players:", err);
+        return res.status(500).json({ error: "Failed to fetch unclaimed roster from database" });
     }
-});
+};
+
+// Supports both URL formats so either one called by your frontend works:
+app.get('/api/unclaimed-players', getUnclaimedPlayers);
+app.get('/api/players/unclaimed', getUnclaimedPlayers);
 
 // --- 4. SIGN UP: REQUEST BREVO OTP ---
-router.post('/auth/brevo/request-signup-otp', async (req, res) => {
-    const { email, playerId } = req.body;
-    if (!email || !playerId) {
-        return res.status(400).json({ error: "Email and player identity required" });
-    }
 
-    try {
-        // Verify profile isn't already claimed
-        const player = await Player.findById(playerId);
-        if (!player || player.isClaimed) {
-            return res.status(400).json({ error: "This profile has already been claimed by another player." });
-        }
-
-        const otp = generateOtp();
-        otpStore.set(email.toLowerCase(), {
-            otp,
-            expiresAt: Date.now() + 5 * 60 * 1000,
-            playerId
-        });
-
-        await sendBrevoOtpEmail(email, otp, "Use the security code below to claim your player profile and finalize account creation.");
-        res.json({ success: true, message: "Brevo OTP dispatched successfully" });
-    } catch (err) {
-        console.error("Brevo dispatch error:", err);
-        res.status(500).json({ error: "Brevo email gateway failed to send OTP" });
-    }
-});
 
 // --- 5. SIGN UP: VERIFY OTP & LOCK PROFILE ---
-router.post('/auth/brevo/verify-signup-otp', async (req, res) => {
+// 2. VERIFY SIGN-UP OTP & PERMANENTLY CLAIM PROFILE
+app.post('/api/auth/brevo/verify-signup-otp', async (req, res) => {
     const { email, otp, playerId } = req.body;
-    const record = otpStore.get(email.toLowerCase());
+    const Player = require('./models/Player'); // adjust path if needed
 
-    if (!record || record.otp !== otp || Date.now() > record.expiresAt) {
-        return res.status(400).json({ error: "Invalid or expired OTP code" });
+    if (!email || !otp || !playerId) {
+        return res.status(400).json({ error: "Email, OTP, and player ID are required" });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    global.otpCache = global.otpCache || {};
+    const cachedData = global.otpCache[cleanEmail];
+
+    // Check OTP validity and expiration
+    if (!cachedData || cachedData.otp !== otp.trim()) {
+        return res.status(400).json({ error: "Invalid OTP code entered." });
+    }
+
+    if (Date.now() > cachedData.expires) {
+        delete global.otpCache[cleanEmail];
+        return res.status(400).json({ error: "OTP code has expired. Please request a new one." });
     }
 
     try {
         const player = await Player.findById(playerId);
-        if (!player || player.isClaimed) {
-            return res.status(400).json({ error: "This player identity has already been claimed." });
+        if (!player) {
+            return res.status(404).json({ error: "Player identity not found in database." });
         }
 
-        // Permanently lock profile claim
+        if (player.isClaimed) {
+            return res.status(400).json({ error: "This player identity has already been claimed by another user." });
+        }
+
+        // Permanently lock profile to this user
         player.isClaimed = true;
-        player.claimedEmail = email.toLowerCase();
+        player.claimedEmail = cleanEmail;
         await player.save();
 
-        otpStore.delete(email.toLowerCase());
-        res.json({ success: true, player });
+        // Clear OTP after successful verification
+        delete global.otpCache[cleanEmail];
+
+        return res.json({ success: true, player });
     } catch (err) {
-        res.status(500).json({ error: "Failed to complete identity claim." });
+        console.error("Sign-up verify error:", err);
+        return res.status(500).json({ error: "Server failed to finalize profile claim." });
     }
 });
-
 // --- 6. SIGN IN: REQUEST 2FA OTP VIA BREVO ---
-router.post('/auth/brevo/request-signin-otp', async (req, res) => {
+// 1. REQUEST SIGN-IN OTP
+app.post('/api/auth/brevo/request-signin-otp', async (req, res) => {
     const { email, uid } = req.body;
+    const Player = require('./models/Player'); // adjust path if needed
+
+    if (!email) {
+        return res.status(400).json({ error: "Email is required" });
+    }
 
     try {
-        // Find player claimed with this email or uid
+        const cleanEmail = email.toLowerCase().trim();
+
+        // Check if player profile exists with this email or Firebase UID
         const player = await Player.findOne({
-            $or: [{ claimedEmail: email.toLowerCase() }, { firebaseUid: uid }]
+            $or: [
+                { claimedEmail: cleanEmail },
+                { firebaseUid: uid }
+            ]
         });
 
         if (!player) {
-            return res.status(404).json({ error: "No claimed clan profile found for this account." });
+            return res.status(404).json({ error: "No player profile linked to this email. Please Sign Up to claim an identity." });
         }
 
-        const otp = generateOtp();
-        otpStore.set(email.toLowerCase(), {
-            otp,
-            expiresAt: Date.now() + 5 * 60 * 1000,
-            playerId: player._id
-        });
+        // Generate 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-        await sendBrevoOtpEmail(email, otp, "Two-Factor authentication code for clan sign in.");
-        res.json({ success: true });
+        // Save in global memory cache (valid for 5 minutes)
+        global.otpCache = global.otpCache || {};
+        global.otpCache[cleanEmail] = {
+            otp,
+            playerId: player._id,
+            expires: Date.now() + 300000 // 5 minutes
+        };
+
+        // Dispatch email via Brevo
+        await sendBrevoOtpEmail(cleanEmail, otp, "Sign in two-factor authentication security code.");
+
+        return res.json({ success: true, message: "2FA OTP sent to email" });
     } catch (err) {
-        res.status(500).json({ error: "Failed to dispatch 2FA OTP." });
+        console.error("Sign-in OTP dispatch error:", err);
+        return res.status(500).json({ error: "Failed to dispatch Brevo 2FA code" });
     }
 });
 
 // --- 7. SIGN IN: VERIFY 2FA OTP ---
-router.post('/auth/brevo/verify-signin-otp', async (req, res) => {
-    const { email, otp } = req.body;
-    const record = otpStore.get(email.toLowerCase());
+// 3. VERIFY SIGN-IN OTP
+app.post('/api/auth/brevo/verify-signin-otp', async (req, res) => {
+    const { email, otp, uid } = req.body;
+    const Player = require('./models/Player'); // adjust path if needed
 
-    if (!record || record.otp !== otp || Date.now() > record.expiresAt) {
-        return res.status(400).json({ error: "Invalid or expired OTP code" });
+    if (!email || !otp) {
+        return res.status(400).json({ error: "Email and OTP are required" });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    global.otpCache = global.otpCache || {};
+    const cachedData = global.otpCache[cleanEmail];
+
+    // Check OTP validity and expiration
+    if (!cachedData || cachedData.otp !== otp.trim()) {
+        return res.status(400).json({ error: "Invalid or incorrect OTP code." });
+    }
+
+    if (Date.now() > cachedData.expires) {
+        delete global.otpCache[cleanEmail];
+        return res.status(400).json({ error: "OTP code expired. Please sign in again." });
     }
 
     try {
-        const player = await Player.findById(record.playerId);
-        otpStore.delete(email.toLowerCase());
-        res.json({ success: true, player });
+        // Retrieve claimed player
+        const player = await Player.findById(cachedData.playerId);
+        if (!player) {
+            return res.status(404).json({ error: "Linked clan player profile not found." });
+        }
+
+        // Link Firebase UID if not yet saved
+        if (uid && !player.firebaseUid) {
+            player.firebaseUid = uid;
+            await player.save();
+        }
+
+        // Clear OTP after login
+        delete global.otpCache[cleanEmail];
+
+        return res.json({ success: true, player });
     } catch (err) {
-        res.status(500).json({ error: "Failed to authenticate session" });
+        console.error("Sign-in verify error:", err);
+        return res.status(500).json({ error: "Failed to authenticate session" });
     }
 });
-
-// --- 8. GOOGLE AUTH SYNC ---
-
-
-module.exports = router;
 // Paste this directly inside server.js (before app.listen)
 app.post('/api/auth/firebase-google', async (req, res) => {
     const { email, uid } = req.body;
@@ -3971,6 +4025,35 @@ app.post('/api/auth/firebase-google', async (req, res) => {
     } catch (err) {
         console.error("Google Auth Error:", err);
         res.status(500).json({ error: "Google verification failed on database" });
+    }
+});
+// Paste directly inside server.js:
+app.post('/api/auth/brevo/request-signup-otp', async (req, res) => {
+    const { email, playerId } = req.body;
+
+    if (!email || !playerId) {
+        return res.status(400).json({ error: "Email and player identity required" });
+    }
+
+    try {
+        const player = await Player.findById(playerId);
+        if (!player || player.isClaimed) {
+            return res.status(400).json({ error: "This profile has already been claimed." });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        // Save OTP temporarily (or in memory)
+        global.otpCache = global.otpCache || {};
+        global.otpCache[email.toLowerCase()] = { otp, playerId, expires: Date.now() + 300000 };
+
+        // Send via Brevo API
+        await sendBrevoOtpEmail(email, otp, "Claim your player profile with this security code.");
+
+        return res.json({ success: true, message: "OTP sent" });
+    } catch (err) {
+        console.error("Brevo Error:", err);
+        return res.status(500).json({ error: "Failed to send Brevo OTP email" });
     }
 });
 const PORT = process.env.PORT || 5000;
