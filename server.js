@@ -3722,5 +3722,91 @@ app.post('/api/matches', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+const highlightSchema = new mongoose.Schema({
+    title: { type: String, required: true },
+    url: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now }
+});
+
+const playerSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    nickname: String,
+    
+    // --- ADDED CREDENTIALS ---
+    gamerTag: { type: String, default: "" },
+    efootballId: { type: String, default: "" },
+
+    // --- ADDED HIGHLIGHTS ---
+    highlights: [highlightSchema],
+
+    image: String,
+    backgroundImage: String,
+    squadImage: String,
+    auctionPrice: { type: Number, default: 0 },
+    marketValue: { type: Number, default: 0 },
+    bdrPoints: { type: Number, default: 0 },
+    teamName: String,
+    isCaptain: { type: Boolean, default: false }
+    // ... other existing fields
+}, { timestamps: true });
+
+
+const router = express.Router();
+const Player = require('../models/Player');
+
+// 1. ADD A HIGHLIGHT VIDEO CLIP
+router.post('/players/:id/highlights', async (req, res) => {
+    try {
+        const { title, url } = req.body;
+        if (!title || !url) {
+            return res.status(400).json({ error: "Title and URL are required" });
+        }
+
+        const player = await Player.findById(req.params.id);
+        if (!player) return res.status(404).json({ error: "Player not found" });
+
+        player.highlights.unshift({ title, url });
+        await player.save();
+
+        res.json({ success: true, highlights: player.highlights });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2. DELETE A HIGHLIGHT VIDEO CLIP BY INDEX
+router.delete('/players/:id/highlights/:clipIndex', async (req, res) => {
+    try {
+        const index = parseInt(req.params.clipIndex);
+        const player = await Player.findById(req.params.id);
+        if (!player) return res.status(404).json({ error: "Player not found" });
+
+        if (index >= 0 && index < player.highlights.length) {
+            player.highlights.splice(index, 1);
+            await player.save();
+            return res.json({ success: true, highlights: player.highlights });
+        } else {
+            return res.status(400).json({ error: "Invalid clip index" });
+        }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 3. ENSURE YOUR EXISTING PUT ROUTE UPDATES gamerTag & efootballId
+router.put('/players/:id', async (req, res) => {
+    try {
+        const player = await Player.findByIdAndUpdate(
+            req.params.id,
+            { $set: req.body },
+            { new: true, runValidators: true }
+        );
+        res.json({ success: true, player });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+module.exports = router;
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Admin Server running on ${PORT}`));
