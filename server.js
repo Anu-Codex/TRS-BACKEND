@@ -3821,11 +3821,6 @@ if (!admin.apps.length) {
 }
 
 // --- 2. BREVO API SETUP ---
-const brevoClient = new SibApiV3Sdk.TransactionalEmailsApi();
-brevoClient.setApiKey(
-    SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey,
-    process.env.BREVO_API_KEY
-);
 
 // In-Memory OTP Store (Use Redis in high-scale production)
 const otpStore = new Map(); // key: email, value: { otp, expiresAt, playerId }
@@ -3834,25 +3829,40 @@ function generateOtp() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+// ✅ CRASH-PROOF BREVO EMAIL FUNCTION (USES NATIVE FETCH)
 async function sendBrevoOtpEmail(toEmail, otp, purpose) {
-    const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
-    sendSmtpEmail.subject = `THE RISING STARS CLAN | Your Security Code: ${otp}`;
-    sendSmtpEmail.to = [{ email: toEmail }];
-    sendSmtpEmail.sender = {
-        name: "The Rising Stars Clan",
-        email: process.env.BREVO_SENDER_EMAIL || "verify@therisingstars.com"
-    };
-    sendSmtpEmail.htmlContent = `
-        <div style="font-family:'Segoe UI',sans-serif; background:#040711; color:#ffffff; padding:30px; border-radius:14px; max-width:480px; margin:0 auto; border:1px solid #00f3ff;">
-            <h2 style="color:#00f3ff; margin-top:0; letter-spacing:1.5px;">THE RISING STARS</h2>
-            <p style="color:#94a3b8; font-size:14px;">${purpose}</p>
-            <div style="font-size:32px; font-weight:bold; letter-spacing:8px; color:#00f3ff; padding:15px; background:#070d1d; border-radius:10px; text-align:center; margin:20px 0; border:1px dashed #00f3ff;">
-                ${otp}
-            </div>
-            <p style="color:#64748b; font-size:12px; margin-bottom:0;">This code will expire in 5 minutes. Do not share this code with anyone.</p>
-        </div>
-    `;
-    return brevoClient.sendTransacEmail(sendSmtpEmail);
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+            "accept": "application/json",
+            "api-key": process.env.BREVO_API_KEY,
+            "content-type": "application/json"
+        },
+        body: JSON.stringify({
+            sender: {
+                name: "The Rising Stars Clan",
+                email: process.env.BREVO_SENDER_EMAIL || "verify@therisingstars.com"
+            },
+            to: [{ email: toEmail }],
+            subject: `THE RISING STARS CLAN | Your Security Code: ${otp}`,
+            htmlContent: `
+                <div style="font-family:'Segoe UI',sans-serif; background:#040711; color:#ffffff; padding:30px; border-radius:14px; max-width:480px; margin:0 auto; border:1px solid #00f3ff;">
+                    <h2 style="color:#00f3ff; margin-top:0; letter-spacing:1.5px;">THE RISING STARS</h2>
+                    <p style="color:#94a3b8; font-size:14px;">${purpose}</p>
+                    <div style="font-size:32px; font-weight:bold; letter-spacing:8px; color:#00f3ff; padding:15px; background:#070d1d; border-radius:10px; text-align:center; margin:20px 0; border:1px dashed #00f3ff;">
+                        ${otp}
+                    </div>
+                    <p style="color:#64748b; font-size:12px; margin-bottom:0;">This code will expire in 5 minutes. Do not share this code with anyone.</p>
+                </div>
+            `
+        })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+        throw new Error(data.message || "Failed to send Brevo email");
+    }
+    return data;
 }
 
 // --- 3. GET UNCLAIMED PLAYERS ---
