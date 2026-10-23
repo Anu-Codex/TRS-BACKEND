@@ -3750,9 +3750,7 @@ const playerSchema = new mongoose.Schema({
     // ... other existing fields
 }, { timestamps: true });
 
-
 const router = express.Router();
-const Player = require('../models/Player');
 
 // 1. ADD A HIGHLIGHT VIDEO CLIP
 router.post('/players/:id/highlights', async (req, res) => {
