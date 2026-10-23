@@ -118,6 +118,10 @@ formation: String,
 role: String,
 winRate: String,
 matchesPlayed: Number,
+    isClaimed: { type: Boolean, default: false },
+    claimedEmail: { type: String, default: "" },
+    firebaseUid: { type: String, default: "" },
+    googleEmail: { type: String, default: "" },
 
     // Trophies count
     trophies: {
@@ -3865,52 +3869,7 @@ async function sendBrevoOtpEmail(toEmail, otp, purpose) {
 
 
 // --- 5. SIGN UP: VERIFY OTP & LOCK PROFILE ---
-// 2. VERIFY SIGN-UP OTP & PERMANENTLY CLAIM PROFILE
-app.post('/api/auth/brevo/verify-signup-otp', async (req, res) => {
-    const { email, otp, playerId } = req.body;
-    
-    if (!email || !otp || !playerId) {
-        return res.status(400).json({ error: "Email, OTP, and player ID are required" });
-    }
 
-    const cleanEmail = email.toLowerCase().trim();
-    global.otpCache = global.otpCache || {};
-    const cachedData = global.otpCache[cleanEmail];
-
-    // Check OTP validity and expiration
-    if (!cachedData || cachedData.otp !== otp.trim()) {
-        return res.status(400).json({ error: "Invalid OTP code entered." });
-    }
-
-    if (Date.now() > cachedData.expires) {
-        delete global.otpCache[cleanEmail];
-        return res.status(400).json({ error: "OTP code has expired. Please request a new one." });
-    }
-
-    try {
-        const player = await Player.findById(playerId);
-        if (!player) {
-            return res.status(404).json({ error: "Player identity not found in database." });
-        }
-
-        if (player.isClaimed) {
-            return res.status(400).json({ error: "This player identity has already been claimed by another user." });
-        }
-
-        // Permanently lock profile to this user
-        player.isClaimed = true;
-        player.claimedEmail = cleanEmail;
-        await player.save();
-
-        // Clear OTP after successful verification
-        delete global.otpCache[cleanEmail];
-
-        return res.json({ success: true, player });
-    } catch (err) {
-        console.error("Sign-up verify error:", err);
-        return res.status(500).json({ error: "Server failed to finalize profile claim." });
-    }
-});
 // --- 6. SIGN IN: REQUEST 2FA OTP VIA BREVO ---
 // 1. REQUEST SIGN-IN OTP
 app.post('/api/auth/brevo/request-signin-otp', async (req, res) => {
@@ -4002,27 +3961,94 @@ app.post('/api/auth/brevo/verify-signin-otp', async (req, res) => {
         return res.status(500).json({ error: "Failed to authenticate session" });
     }
 });
-// Paste this directly inside server.js (before app.listen)
+// =========================================================================
+// 1. GOOGLE AUTHENTICATION ROUTE (SMART LINKING)
+// =========================================================================
 app.post('/api/auth/firebase-google', async (req, res) => {
     const { email, uid } = req.body;
+    
+    if (!email || !uid) {
+        return res.status(400).json({ error: "Missing email or Google UID" });
+    }
 
     try {
+        const cleanEmail = email.toLowerCase().trim();
+
+        // Search by Firebase UID OR any email field (case-insensitive)
         const player = await Player.findOne({
-            $or: [{ claimedEmail: email.toLowerCase() }, { firebaseUid: uid }]
+            $or: [
+                { firebaseUid: uid },
+                { claimedEmail: { $regex: new RegExp(`^${cleanEmail}$`, 'i') } },
+                { email: { $regex: new RegExp(`^${cleanEmail}$`, 'i') } },
+                { googleEmail: { $regex: new RegExp(`^${cleanEmail}$`, 'i') } }
+            ]
         });
 
         if (player) {
-            if (!player.firebaseUid) {
+            // Permanently bind Google UID and email if not yet attached
+            if (!player.firebaseUid || player.firebaseUid !== uid) {
                 player.firebaseUid = uid;
-                await player.save();
             }
-            res.json({ isLinked: true, player });
+            if (!player.claimedEmail) {
+                player.claimedEmail = cleanEmail;
+            }
+            player.isClaimed = true;
+            await player.save();
+
+            console.log(`✅ Google Sign-In matched to player: ${player.name}`);
+            return res.json({ isLinked: true, player });
         } else {
-            res.json({ isLinked: false, email });
+            console.log(`⚠️ No player linked to Google: ${cleanEmail}`);
+            return res.json({ isLinked: false, email: cleanEmail });
         }
     } catch (err) {
-        console.error("Google Auth Error:", err);
-        res.status(500).json({ error: "Google verification failed on database" });
+        console.error("Google Auth Database Error:", err);
+        return res.status(500).json({ error: "Database error during Google login" });
+    }
+});
+
+// =========================================================================
+// 2. VERIFY SIGN-UP OTP (SAVES FIREBASE UID AT THE SAME TIME)
+// =========================================================================
+app.post('/api/auth/brevo/verify-signup-otp', async (req, res) => {
+    const { email, otp, playerId, uid } = req.body;
+    
+
+    if (!email || !otp || !playerId) {
+        return res.status(400).json({ error: "Email, OTP, and player ID are required" });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const cached = global.otpCache ? global.otpCache[cleanEmail] : null;
+
+    if (!cached || cached.otp !== otp.trim()) {
+        return res.status(400).json({ error: "Invalid OTP code entered." });
+    }
+
+    if (Date.now() > cached.expires) {
+        delete global.otpCache[cleanEmail];
+        return res.status(400).json({ error: "OTP expired. Please request a new one." });
+    }
+
+    try {
+        const player = await Player.findById(playerId);
+        if (!player) {
+            return res.status(404).json({ error: "Player profile not found." });
+        }
+
+        // Lock profile permanently to both email AND Google UID
+        player.isClaimed = true;
+        player.claimedEmail = cleanEmail;
+        if (uid) {
+            player.firebaseUid = uid;
+        }
+        await player.save();
+
+        delete global.otpCache[cleanEmail];
+        return res.json({ success: true, player });
+    } catch (err) {
+        console.error("Sign-up verify error:", err);
+        return res.status(500).json({ error: "Failed to finalize profile claim." });
     }
 });
 // Paste directly inside server.js:
@@ -4053,6 +4079,23 @@ app.post('/api/auth/brevo/request-signup-otp', async (req, res) => {
         console.error("Brevo Error:", err);
         return res.status(500).json({ error: "Failed to send Brevo OTP email" });
     }
+});
+// Link your Google email to your name:
+app.get('/api/admin/link-me', async (req, res) => {
+    
+    // Replace with your exact player name and Google email:
+    const player = await Player.findOneAndUpdate(
+        { name: "TRS_RAIZO" },
+        { 
+            $set: { 
+                isClaimed: true, 
+                claimedEmail: "sarkaranubhav48@gmail.com", // your Google email
+                googleEmail: "sarkaranubhav48@gmail.com"
+            } 
+        },
+        { new: true }
+    );
+    res.json({ message: "Linked successfully!", player });
 });
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Admin Server running on ${PORT}`));
