@@ -3728,28 +3728,6 @@ const highlightSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-const playerSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    nickname: String,
-    
-    // --- ADDED CREDENTIALS ---
-    gamerTag: { type: String, default: "" },
-    efootballId: { type: String, default: "" },
-
-    // --- ADDED HIGHLIGHTS ---
-    highlights: [highlightSchema],
-
-    image: String,
-    backgroundImage: String,
-    squadImage: String,
-    auctionPrice: { type: Number, default: 0 },
-    marketValue: { type: Number, default: 0 },
-    bdrPoints: { type: Number, default: 0 },
-    teamName: String,
-    isCaptain: { type: Boolean, default: false }
-    // ... other existing fields
-}, { timestamps: true });
-
 const router = express.Router();
 
 // 1. ADD A HIGHLIGHT VIDEO CLIP
@@ -3792,18 +3770,7 @@ router.delete('/players/:id/highlights/:clipIndex', async (req, res) => {
 });
 
 // 3. ENSURE YOUR EXISTING PUT ROUTE UPDATES gamerTag & efootballId
-router.put('/players/:id', async (req, res) => {
-    try {
-        const player = await Player.findByIdAndUpdate(
-            req.params.id,
-            { $set: req.body },
-            { new: true, runValidators: true }
-        );
-        res.json({ success: true, player });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
+
 // routes/authRoutes.js
 
 const admin = require('firebase-admin');
